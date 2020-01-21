@@ -1,0 +1,35 @@
+import tkinter
+from tkinter import *
+#### Start of GUI ####
+mainWindow = tkinter.Tk(screenName=None, baseName=None,
+                 className=' Smart Heating Pad', useTk=1)
+
+mainFrame = Frame(mainWindow)
+mainFrame.pack(side = LEFT)
+
+tempFrame = Frame(mainFrame)
+tempFrame.pack(side = TOP)
+temp = Label (tempFrame, text="Desired Temperature")
+temp.pack(side = TOP)
+#Another option would be to use Spinbox (what chris wants)
+tempScale = Scale(mainFrame, from_=0, to=200, orient=HORIZONTAL).pack()
+
+vibeFrame = Frame(mainWindow)
+vibeFrame.pack(anchor=CENTER)
+vibelabel = Label(vibeFrame, text = "Vibration Setting")
+vibelabel.pack(side = TOP)
+var = IntVar()
+desiredVibe1 = Radiobutton(vibeFrame, text = "Off", variable=var, value=1).pack(side = BOTTOM)
+desiredVibe2 = Radiobutton(vibeFrame, text = "One", variable=var, value=2).pack(side = BOTTOM)
+desiredVibe3 = Radiobutton(vibeFrame, text = "Two", variable=var, value=3).pack(side = BOTTOM)
+desiredVibe4 = Radiobutton(vibeFrame, text = "Three", variable=var, value=4).pack(side = BOTTOM)
+
+timerFrame = Frame(mainFrame)
+timerFrame.pack(side = BOTTOM)
+timer = Label(timerFrame, text = "Timer in Minutes \n(Leave zero for no timer)")
+timer.pack(side = TOP)
+desiredTimer = Spinbox(timerFrame, from_=0,to=120)
+desiredTimer.pack(side=BOTTOM)
+#### End of GUI ####
+
+mainWindow.mainloop()
