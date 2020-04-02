@@ -17,6 +17,15 @@ def main():
         print ("[+] Knocking on port %s:%s" % (destination,42069))
         f.connect_ex((destination, 42069))
         f.sendall(b'12345678901234')
+        chunks = []
+        bytes_recd = 0
+        while bytes_recd < MSGLEN:
+            chunk = f.recv(min(MSGLEN - bytes_recd, 2048))
+            if chunk == b'':
+                raise RuntimeError("socket connection broken")
+            chunks.append(chunk)
+            bytes_recd = bytes_recd + len(chunk)
+        return b''.join(chunks) 
         f.close()
 
 if __name__ == '__main__':
