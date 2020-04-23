@@ -1,0 +1,292 @@
+/*
+   April 22nd, 2020
+   This code accomplishes port knocking. Calling portKnock() opens a series of PORTS in order and listens for some message.
+   When the message is received and verified, the client is closed and the server closed and opened to the next port.
+   After some number of PORTS are opened and closed, the main com port is opened and control is returned to the caller of portKnock().
+   This code also reads data from the main com port (42069) and stores it.
+   Each second that the client is connected, the current values are sent back to the client.
+   In addition, this code accomplishes the Arduino Mega serial communication
+*/
+
+#include <WiFi.h>
+
+// WiFi Info
+const char* ssid     = "";
+const char* password = "";
+
+const int MEGA_RX = 0;
+const int MEGA_TX = 1;
+const int PORTS[] = {5260, 12345, 36031, 42020, 42069}; // Port Knocking with the first four
+const int NUM_PORTS = 5;
+int portIndex = 0;
+
+// On startup port knocking has not yet been completed
+bool portKnockComplete = false;
+
+char* message = (char*) malloc(sizeof(char) * 14);
+int characterIndex = 0;     // make a String to hold incoming data from the client
+
+bool powerState = false;
+int setTemp = 0;
+int currentTemp = 0;
+int vibrationSetting = 0;
+int timerHrs = 0;
+int timerMins = 0;
+int timerSecs = 0;
+int millissecs = millis();
+int millissecs2 = millis();
+
+// Establish the pins the serial communication with the Arduino Mega will be using
+SoftwareSerial arduinoMega(MEGA_RX, MEGA_TX);
+
+// Declare the WiFiServer hosted on the ESP32
+WiFiServer server;
+
+void setup()
+{
+  // For debugging with the USB connection, start the USB connection
+  Serial.begin(115200);
+
+  // Start the Arduino Mega Serial Connection
+  arduinoMega.begin(115200);
+
+  // Allow time for Serial startup
+  delay(10);
+
+  // Connect To WiFi
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+  
+  // Start WiFi Connection
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected.");
+  Serial.println("My IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void loop()
+{
+  if(arduinoMega.available())
+  {
+    message = arduinoMega.read();
+    parseSerial(message);  
+  }
+   
+  if (millis() - millissecs2 > 1000) // Write to the client the current values no more than once a second
+  {
+    writeSerial(arduinoMega);
+    millissecs = millis();
+  }
+
+
+  if (!portKnockComplete)
+  {
+    portKnock();
+    return;
+  }
+
+  if (!server)
+  {
+    Serial.println("Starting Server...");
+    server = WiFiServer(PORTS[portIndex]);
+    server.begin();
+  }
+
+  WiFiClient client = server.available();   // listen for incoming clients
+
+  if (client) // if you get a client,
+  {
+    Serial.println("Client IP Address: ");           // print a message out the serial port
+    Serial.println(client.remoteIP());
+    Serial.println("Client Port Number: ");
+    Serial.println(client.localPort());
+
+    while (client.connected())
+    { // loop while the client's connected
+      if (client.available())
+      { // if there's bytes to read from the client,
+
+        message[characterIndex] = client.read();             // Read 14 characters at a time from the client
+        Serial.print(message[characterIndex]);
+        characterIndex++;
+        if (characterIndex == 14)
+        {
+          //client.read(); // Remove Excess Characters from the buffer. NOTE: while(client.peek()) client.read(); will not work.
+          Serial.println("Message Received!");
+          parseMessage(message);
+          printValues();            //DEBUG
+          characterIndex = 0;
+        }
+
+      }
+      if (millis() - millissecs > 1000) // Write to the client the current values no more than once a second
+      {
+        writeClient(client);
+        millissecs = millis();
+      }
+    }
+  }
+
+}
+
+/*
+   This function is used to open port 42069 to the connecting client
+   This function ensures that the first four PORTS are connected to and receive a 'Y' from the client
+*/
+void portKnock()
+{
+  if (!server) // WiFiServer bool() returns whether or not the server is listening.
+  {
+    Serial.print("Starting Server On Port: ");
+    Serial.println(PORTS[portIndex]);
+    server = WiFiServer(PORTS[portIndex]);
+    server.begin();
+  }
+
+  WiFiClient client = server.available();   // listen for incoming clients
+
+  if (client) // if you get a client,
+  {
+    Serial.println("Client IP Address: ");           // print a message out the serial port
+    Serial.println(client.remoteIP());
+    Serial.println("Client Port Number: ");
+    Serial.println(client.localPort());
+    //String currentLine = "";                // make a String to hold incoming data from the client
+    while (client.connected())
+    { // loop while the client's connected
+      if (client.available())
+      { // if there's bytes to read from the client,
+        char c = client.read();             // read a byte, then
+        if (c == 'Y')
+        {
+          Serial.println("'Y' received!");
+          client.stop();                    // The client must be killed before the server
+          server.end();
+          portIndex++;
+          if (portIndex == (NUM_PORTS - 1))
+          {
+            portKnockComplete = true;
+            return;
+          }
+        }
+      }
+    }
+  }
+}
+
+/*
+   This function parses the "message" at src for:
+   powerState, setTemp, currentTemp, vibrationSetting, timerHrs, timerMins, timerHrs
+*/
+void parseMessage(char* src)
+{
+  powerState = src[0] == '1';
+  setTemp = parseInteger(src + 1, 3);
+  currentTemp = parseInteger(src + 4, 3);
+  vibrationSetting = parseInteger(src + 7, 1);
+  timerHrs = parseInteger(src + 8, 2);
+  timerMins = parseInteger(src + 10, 2);
+  timerSecs = parseInteger(src + 12, 2);
+}
+
+/*
+   This function takes a source string src with length length and parses
+   it for an integer.
+*/
+int parseInteger(char* src, int len)
+{
+  int value = 0;
+
+  for (int i = 0, j = len - 1; i < len; i++, j--)
+    value += ((int) src[i] - '0') * power(10, j);
+
+  return value;
+}
+
+/*
+   This function rases base to exp power and returns the result.
+*/
+int power(int base, int exponent)
+{
+  int value = 1;
+  for (int i = 0; i < exponent; i++)
+    value *= base;
+  return value;
+}
+
+/*
+   This function is used for debugging purposes
+   It prints the powerState, currentTemp, setTemp, vibrationSetting, and timer values to the serial monitor
+*/
+void printValues()
+{
+  Serial.print("PowerState: ");
+  Serial.println(powerState);
+  Serial.print("CurrentTemp: ");
+  Serial.println(currentTemp);
+  Serial.print("SetTemp: ");
+  Serial.println(setTemp);
+  Serial.print("VibrationSetting: ");
+  Serial.println(vibrationSetting);
+  Serial.print("Timer: ");
+  Serial.print(timerHrs);
+  Serial.print(':');
+  Serial.print(timerMins);
+  Serial.print(':');
+  Serial.println(timerSecs);
+}
+
+/*
+   This function writes the powerState, currentTemp, setTemp, and vibrationSetting, respectfully to the client
+   This function is called once every second
+*/
+void writeClient(WiFiClient client)
+{
+  client.print((char)(powerState + '0'));
+  client.print((char)((currentTemp / 100) + '0'));
+  client.print((char)((currentTemp / 10 % 10) + '0'));
+  client.print((char)((currentTemp % 10) + '0'));
+  client.print((char)((setTemp / 100) + '0'));
+  client.print((char)((setTemp / 10 % 10) + '0'));
+  client.print((char)((setTemp % 10) + '0'));
+  client.print((char)(vibrationSetting + '0'));
+  client.flush();
+}
+
+void writeSerial(SoftwareSerial client)
+{
+  char* serialMessage = malloc(sizeof(char) * 9);
+  
+  serialMessage[0] = (char)(powerState + '0');
+  serialMessage[1] = (char)((currentTemp / 100) + '0');
+  serialMessage[2] = (char)((currentTemp / 10 % 10) + '0');
+  serialMessage[3] = (char)((currentTemp % 10) + '0');
+  serialMessage[4] = (char)((setTemp / 100) + '0'); 
+  serialMessage[5] = (char)((setTemp / 10 % 10) + '0');
+  serialMessage[6] = (char)((setTemp % 10) + '0');  
+  serialMessage[7] = (char)(vibrationSetting + '0');
+  serialMessage[8] = '\0';
+
+  client.write(serialMessage);
+  client.flush();
+  free(serialMessage);
+}
+
+void parseSerial(char* src)
+{
+  powerState = src[0] == '1';
+  setTemp = parseInteger(src + 1, 3);
+  currentTemp = parseInteger(src + 4, 3);
+  vibrationSetting = parseInteger(src + 7, 1);
+  timerHrs = parseInteger(src + 8, 2);  
+  timerMins = parseInteger(src + 10, 2);
+  timerSecs = parseInteger(src + 12, 2);
+}
+

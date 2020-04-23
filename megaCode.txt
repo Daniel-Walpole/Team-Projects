@@ -1,0 +1,256 @@
+/*
+ * This File is the Arduino Mega Implementation for The Heating Pad
+ * Implemented here is the code for the button presses, eating element control, and communication with the ESP32
+ * NOTE: This code was not able to be fully tested due to the lack of hardware
+ */
+
+// The Software Serial library allows for ESP32 to Arduino Mega serial communication on specific pins
+ #include <SoftwareSerial.h>
+
+// Set the I/O pins
+const int ESP32_RX = 0;
+const int ESP32_TX = 1;
+const int POWER_BTN = 14;
+const int TEMP_UP_BTN = 7;
+const int TEMP_DOWN_BTN = 8;
+const int VIBRATION_BTN = 6;
+const int LCD_SDA = 20;
+const int LCD_SCL = 21;
+const int FIRST_MOTOR = 22;
+const int LAST_MOTOR = 40;
+const int FIRST_PRESSURE_SW = 9;
+const int LAST_PRESSURE_SW = 12;
+const int HEATING_COIL = 13;
+
+// Establish the heating pad's maximum temperature
+const int MAX_SET_TEMP = 125;
+
+// Millissecs is used as a timer to prevent sending serial messages more than once per second.
+int millissecs = millis();
+
+// Make a String to hold incoming data from the ESP32
+char* message = (char*) malloc(sizeof(char) * 14);
+
+// Initialize the parameters of the device
+bool powerState = false;
+int setTemp = 0;
+int currentTemp = 0;
+int vibrationSetting = 1;
+int timerHrs = 0;
+int timerMins = 0;
+int timerSecs = 0;
+
+// Establish the pins the serial communication with the ESP32 will be using
+SoftwareSerial esp32(ESP32_RX, ESP32_TX);
+
+/*
+ * The code in this function will run once on startup
+ */
+void setup() 
+{
+  esp32.begin(115200);
+
+  // Establish I/O pins as input or output pins
+  pinMode(POWER_BTN, INPUT);
+  pinMode(TEMP_UP_BTN, INPUT);
+  pinMode(TEMP_DOWN_BTN, INPUT);
+  pinMode(TEMP_DOWN_BTN, INPUT);
+  pinMode(VIBRATION_BTN, INPUT);
+  pinMode(A0, INPUT);
+}
+
+/*
+ * The code in this function will run repeatedly after setup();
+ */
+void loop() 
+{
+  // Read the analog value from the thermistor and convert to an integer temperature value
+  currentTemp = convertToTemp(analogRead(A0));
+  
+  if(esp32.available())
+  {
+    message = esp32.read();
+    parseSerial(message);
+  }
+  
+  if (millis() - millissecs > 1000) // Write to the client the current values no more than once a second
+  {
+    writeSerial(esp32);
+    millissecs = millis();
+  }
+
+  if(!powerState)
+  {
+    powerState = digitalRead(POWER_BTN) == HIGH;
+    vibrationSetting = 1;
+  }
+
+  if(powerState)
+  {
+    powerState = digitalRead(POWER_BTN) == LOW;
+    
+    if(digitalRead(VIBRATION_BTN) == HIGH)
+    {
+      if(vibrationSetting == 4)
+        vibrationSetting = 1;
+      else
+        vibrationSetting++;
+    }
+
+    if(digitalRead(TEMP_UP_BTN) == HIGH)
+    {
+      if(setTemp < MAX_SET_TEMP)
+      setTemp++;
+    }
+
+    if(digitalRead(TEMP_DOWN_BTN) == HIGH)
+    {
+      if(setTemp > 0)
+      setTemp--;
+    }
+
+    if(currentTemp < setTemp)
+    {
+      digitalWrite(HEATING_COIL, HIGH);
+    }
+  }
+
+  // Apply the vibration setting by the use of the appropriate function, the default is OFF or setting 1
+  switch(vibrationSetting)
+  {  
+    case 2:
+      vibrationSetting2();
+    break;
+    
+    case 3:
+      vibrationSetting3();
+    break;
+    
+    case 4:
+      vibrationSetting4();
+    break;
+
+    default:
+      vibrationSetting1();
+    break;
+  }
+}
+
+/*
+   This function takes a source string src with length length and parses
+   it for an integer.
+*/
+int parseInteger(char* src, int len)
+{
+  int value = 0;
+
+  for (int i = 0, j = len - 1; i < len; i++, j--)
+    value += ((int) src[i] - '0') * power(10, j);
+
+  return value;
+}
+
+/*
+   This function parses the "message" at src for:
+   powerState, setTemp, currentTemp, vibrationSetting, timerHrs, timerMins, timerHrs
+*/
+void parseSerial(char* src)
+{
+  powerState = src[0] == '1';
+  setTemp = parseInteger(src + 1, 3);
+  currentTemp = parseInteger(src + 4, 3);
+  vibrationSetting = parseInteger(src + 7, 1);
+  timerHrs = parseInteger(src + 8, 2);
+  timerMins = parseInteger(src + 10, 2);
+  timerSecs = parseInteger(src + 12, 2);
+}
+
+/*
+   This function rases base to exp power and returns the result.
+*/
+int power(int base, int exponent)
+{
+  int value = 1;
+  for (int i = 0; i < exponent; i++)
+    value *= base;
+  return value;
+}
+
+/*
+ * This function sends converts integer values into ASCII characters 
+ * and sends the a message via serial to client.
+ */
+void writeSerial(SoftwareSerial client)
+{
+  char* serialMessage = malloc(sizeof(char) * 9);
+  
+  serialMessage[0] = (char)(powerState + '0');
+  serialMessage[1] = (char)((currentTemp / 100) + '0');
+  serialMessage[2] = (char)((currentTemp / 10 % 10) + '0');
+  serialMessage[3] = (char)((currentTemp % 10) + '0');
+  serialMessage[4] = (char)((setTemp / 100) + '0');
+  serialMessage[5] = (char)((setTemp / 10 % 10) + '0');
+  serialMessage[6] = (char)((setTemp % 10) + '0');
+  serialMessage[7] = (char)(vibrationSetting + '0');
+  serialMessage[8] = '\0';
+
+  client.write(serialMessage);
+  client.flush();
+  free(serialMessage);
+}
+
+/*
+ * This function is for Vibration Setting 1
+ * Vibration Setting 1 turns all motors OFF
+ */
+void vibrationSetting1()
+{
+  // Motors are have one I/O pin between them
+  for(int i = FIRST_MOTOR; i <= LAST_MOTOR; i+=2)
+  {
+    digitalWrite(i, LOW);
+  }
+}
+
+/*
+ * This function is for Vibration Setting 2
+ * Vibration Setting 2 turns all motors ON
+ */
+void vibrationSetting2()
+{
+  // Motors are have one I/O pin between them
+  for(int i = FIRST_MOTOR; i <= LAST_MOTOR; i+=2)
+  {
+    digitalWrite(i, HIGH);
+  }
+}
+
+/*
+ * This function is for Vibration Setting 3
+ * Vibration Setting 3
+ */
+void vibrationSetting3()
+{
+  // TODO: When motors are connected and the desired experience is found
+}
+
+/*
+ * This function is for Vibration Setting 4
+ * Vibration Setting 4 
+ */
+ void vibrationSetting4()
+ {
+    // TODO: When motors are connected and the desired experience is found
+ }
+
+/*
+ * NOTE: The values used here are hardcoded specifically for the thermistor used
+ * For a 1 kOhm resistor and a 2-100 kOhm thermistor circuit analysis was completed to obtain these values
+ * This function takes an analog value and converts it to an integer ferenheit temperature
+ */
+int convertToTemp(double value)
+{
+  double voltsPerDeg = (4.95-3.3)/(300+58);
+  double temp = ((value - 3.3) / voltsPerDeg) - 58;
+  return round(temp);
+}
